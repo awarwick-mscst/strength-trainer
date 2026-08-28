@@ -1,0 +1,13 @@
+{
+  "name": "strength-trainer",
+  "version": "1.0.0",
+  "description": "A/B 5x5 linear progression strength tracker (self-hosted, zero dependencies)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}
