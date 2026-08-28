@@ -147,6 +147,13 @@ nav button.active { color: var(--accent); }
 
 .section-title { font-size: 1rem; margin: 18px 0 10px; color: var(--muted); }
 
+.type-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
 /* calendar */
 .cal-head {
   display: flex;

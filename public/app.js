@@ -5,6 +5,7 @@ const badge = document.getElementById('next-type-badge');
 let state = null; // server state
 let session = null; // in-progress workout { type, exercises: [{lift,label,weight,reps:[null|0-5,...]}] }
 let tab = 'today';
+let todayType = null; // A/B override chosen on the Today screen (null = follow rotation)
 
 const SESSION_KEY = 'st-session';
 
@@ -49,10 +50,13 @@ function toast(msg, warn = false) {
 
 // ---------- today ----------
 function startSession() {
-  const plan = state.nextWorkout;
+  const type = todayType || state.nextWorkout.type;
   session = {
-    type: plan.type,
-    exercises: plan.exercises.map((e) => ({ ...e, reps: Array(plan.sets).fill(null) })),
+    type,
+    exercises: state.nextWorkout.plans[type].map((e) => ({
+      ...e,
+      reps: Array(state.nextWorkout.sets).fill(null),
+    })),
   };
   saveSession();
   render();
@@ -89,6 +93,7 @@ async function finishWorkout() {
     const allDone = payload.exercises.every((e) => e.reps.every((r) => r >= 5));
     state = newState;
     session = null;
+    todayType = null;
     saveSession();
     render();
     toast(allDone ? 'Workout complete — weights go up!' : 'Logged. Missed lifts repeat next time.', !allDone);
@@ -100,13 +105,27 @@ async function finishWorkout() {
 function renderToday() {
   view.innerHTML = '';
   if (!session) {
-    const plan = state.nextWorkout;
-    view.appendChild(el(`
+    const suggested = state.nextWorkout.type;
+    const selected = todayType || suggested;
+    const exercises = state.nextWorkout.plans[selected];
+    const head = el(`
       <div class="card">
-        <h2>Workout ${plan.type}</h2>
-        <p class="sub">${plan.sets}×${plan.reps} — ${plan.exercises.map((e) => e.label).join(', ')}</p>
-      </div>`));
-    for (const e of plan.exercises) {
+        <div class="type-head">
+          <h2>Workout ${selected}</h2>
+          <div class="seg">
+            <button data-t="A">A</button>
+            <button data-t="B">B</button>
+          </div>
+        </div>
+        <p class="sub">${state.nextWorkout.sets}×${state.nextWorkout.reps} — ${exercises.map((e) => e.label).join(', ')}</p>
+        ${selected !== suggested ? `<p class="fail-note">Heads up: Workout ${suggested} is next in your rotation.</p>` : ''}
+      </div>`);
+    head.querySelectorAll('.seg button').forEach((b) => {
+      if (b.dataset.t === selected) b.classList.add('active');
+      b.onclick = () => { todayType = b.dataset.t; render(); };
+    });
+    view.appendChild(head);
+    for (const e of exercises) {
       const failNote = state.lifts[e.lift].failCount > 0
         ? `<p class="fail-note">Missed ${state.lifts[e.lift].failCount}× at this weight — deload after 3</p>` : '';
       view.appendChild(el(`

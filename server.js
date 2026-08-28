@@ -84,6 +84,8 @@ function nextWorkoutType() {
 function buildState() {
   const lifts = getLifts();
   const type = nextWorkoutType();
+  const planFor = (t) =>
+    WORKOUTS[t].map((name) => ({ lift: name, label: LIFTS[name], weight: lifts[name].weight }));
   return {
     daysPerWeek: Number(getSetting('daysPerWeek')),
     lifts,
@@ -91,11 +93,8 @@ function buildState() {
       type,
       sets: SETS,
       reps: REPS,
-      exercises: WORKOUTS[type].map((name) => ({
-        lift: name,
-        label: LIFTS[name],
-        weight: lifts[name].weight,
-      })),
+      exercises: planFor(type),
+      plans: { A: planFor('A'), B: planFor('B') },
     },
   };
 }
