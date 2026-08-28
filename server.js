@@ -112,7 +112,10 @@ function recordWorkout(body) {
     if (typeof ex.weight !== 'number' || ex.weight < 0) throw httpError(400, `${ex.lift}: weight required`);
   }
 
-  const workoutDate = date || new Date().toISOString().slice(0, 10);
+  if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw httpError(400, 'date must be YYYY-MM-DD');
+  const now = new Date();
+  const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const workoutDate = date || localToday;
   const insertWorkout = db.prepare('INSERT INTO workouts (date, type) VALUES (?, ?)');
   const insertSet = db.prepare(
     'INSERT INTO workout_sets (workout_id, lift, weight, set_number, reps) VALUES (?, ?, ?, ?, ?)'
@@ -147,10 +150,8 @@ function recordWorkout(body) {
   }
 }
 
-function getHistory(limit = 50) {
-  const workouts = db
-    .prepare('SELECT id, date, type FROM workouts ORDER BY id DESC LIMIT ?')
-    .all(limit);
+function getHistory() {
+  const workouts = db.prepare('SELECT id, date, type FROM workouts ORDER BY id DESC').all();
   const setsFor = db.prepare(
     'SELECT lift, weight, set_number, reps FROM workout_sets WHERE workout_id = ? ORDER BY id'
   );

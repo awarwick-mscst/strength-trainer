@@ -70,8 +70,10 @@ function cycleSet(exIdx, setIdx) {
 }
 
 async function finishWorkout() {
+  const now = new Date();
   const payload = {
     type: session.type,
+    date: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
     exercises: session.exercises.map((e) => ({
       lift: e.lift,
       weight: e.weight,
@@ -166,6 +168,126 @@ function renderToday() {
   view.appendChild(cancel);
 }
 
+// ---------- history: calendar ----------
+let calCursor = null; // { y, m } month being shown
+
+function renderCalendar(history) {
+  const today = new Date();
+  if (!calCursor) calCursor = { y: today.getFullYear(), m: today.getMonth() };
+  const { y, m } = calCursor;
+
+  const byDate = {};
+  for (const w of history) {
+    if (!byDate[w.date]) byDate[w.date] = [];
+    byDate[w.date].push(w.type);
+  }
+
+  const monthName = new Date(y, m, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
+  const card = el(`
+    <div class="card">
+      <div class="cal-head">
+        <button class="cal-nav" data-dir="-1" aria-label="Previous month">‹</button>
+        <h2>${monthName}</h2>
+        <button class="cal-nav" data-dir="1" aria-label="Next month">›</button>
+      </div>
+      <div class="cal-grid cal-days">
+        ${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d) => `<div class="cal-dow">${d}</div>`).join('')}
+      </div>
+      <div class="cal-grid cal-cells"></div>
+    </div>`);
+
+  const cells = card.querySelector('.cal-cells');
+  const firstDow = new Date(y, m, 1).getDay();
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  for (let i = 0; i < firstDow; i++) cells.appendChild(el('<div class="cal-cell empty"></div>'));
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const types = byDate[dateStr];
+    const cell = el(`<div class="cal-cell${dateStr === todayStr ? ' today' : ''}"><span class="cal-num">${d}</span></div>`);
+    if (types) cell.appendChild(el(`<span class="cal-badge type-${types[0]}">${[...new Set(types)].join('')}</span>`));
+    cells.appendChild(cell);
+  }
+
+  card.querySelectorAll('.cal-nav').forEach((b) => {
+    b.onclick = () => {
+      const next = new Date(y, m + Number(b.dataset.dir), 1);
+      calCursor = { y: next.getFullYear(), m: next.getMonth() };
+      render();
+    };
+  });
+  return card;
+}
+
+// ---------- history: progress chart ----------
+const LIFT_COLORS = {
+  squat: '#4da3ff',
+  bench: '#3ecf6e',
+  row: '#ffb454',
+  ohp: '#ff6b6b',
+  deadlift: '#b085ff',
+};
+
+function renderChart(history) {
+  // chronological series of the weight lifted per workout, per lift
+  const series = {};
+  for (const w of [...history].reverse()) {
+    for (const e of w.exercises) {
+      if (!series[e.lift]) series[e.lift] = [];
+      series[e.lift].push({ t: new Date(w.date + 'T12:00:00').getTime(), wt: e.weight });
+    }
+  }
+  const points = Object.values(series).flat();
+  const card = el('<div class="card"><h2>Strength over time</h2></div>');
+  if (points.length === 0) {
+    card.appendChild(el('<p class="sub" style="margin-top:6px">Complete a few workouts to see your progress here.</p>'));
+    return card;
+  }
+
+  const W = 360, H = 200, L = 34, R = 8, T = 12, B = 24;
+  let t0 = Math.min(...points.map((p) => p.t));
+  let t1 = Math.max(...points.map((p) => p.t));
+  if (t0 === t1) { t0 -= 43200000; t1 += 43200000; }
+  const w0 = Math.min(45, ...points.map((p) => p.wt));
+  const w1 = Math.max(...points.map((p) => p.wt)) + 5;
+  const x = (t) => L + ((t - t0) / (t1 - t0)) * (W - L - R);
+  const yy = (wt) => T + (1 - (wt - w0) / (w1 - w0)) * (H - T - B);
+
+  let step = 5;
+  for (const s of [5, 10, 25, 50, 100]) { step = s; if ((w1 - w0) / s <= 6) break; }
+  let grid = '';
+  for (let g = Math.ceil(w0 / step) * step; g <= w1; g += step) {
+    grid += `<line x1="${L}" y1="${yy(g)}" x2="${W - R}" y2="${yy(g)}" class="chart-grid"/>` +
+      `<text x="${L - 5}" y="${yy(g) + 3}" class="chart-label" text-anchor="end">${g}</text>`;
+  }
+  const fmt = (t) => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()}`; };
+  let xlab = '';
+  for (let i = 0; i <= 3; i++) {
+    const t = t0 + ((t1 - t0) * i) / 3;
+    xlab += `<text x="${x(t)}" y="${H - 6}" class="chart-label" text-anchor="middle">${fmt(t)}</text>`;
+  }
+
+  let lines = '';
+  for (const [lift, pts] of Object.entries(series)) {
+    const c = LIFT_COLORS[lift];
+    const coords = pts.map((p) => `${x(p.t).toFixed(1)},${yy(p.wt).toFixed(1)}`);
+    if (coords.length > 1) lines += `<polyline points="${coords.join(' ')}" fill="none" stroke="${c}" stroke-width="2.5" stroke-linejoin="round"/>`;
+    const last = pts[pts.length - 1];
+    lines += `<circle cx="${x(last.t).toFixed(1)}" cy="${yy(last.wt).toFixed(1)}" r="3.5" fill="${c}"/>`;
+  }
+
+  card.appendChild(el(
+    `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Weight per lift over time">${grid}${xlab}${lines}</svg>`
+  ));
+  card.appendChild(el(`
+    <div class="legend">
+      ${Object.entries(series).map(([lift]) =>
+        `<span class="legend-item"><span class="legend-dot" style="background:${LIFT_COLORS[lift]}"></span>${state.lifts[lift].label}</span>`
+      ).join('')}
+    </div>`));
+  return card;
+}
+
 // ---------- history ----------
 async function renderHistory() {
   view.innerHTML = '<p class="hint">Loading…</p>';
@@ -176,12 +298,15 @@ async function renderHistory() {
     .map(([, l]) => `<div class="row"><span>${l.label}</span><span class="reps ok">${l.weight} lb</span></div>`)
     .join('');
   view.appendChild(el(`<div class="card history-item"><h2>Current weights</h2>${lifts}</div>`));
+  view.appendChild(renderCalendar(history));
+  view.appendChild(renderChart(history));
 
   if (history.length === 0) {
     view.appendChild(el('<p class="hint">No workouts yet. Your first is Workout A at 45 lb.</p>'));
     return;
   }
-  for (const w of history) {
+  view.appendChild(el('<h2 class="section-title">Recent workouts</h2>'));
+  for (const w of history.slice(0, 15)) {
     const rows = w.exercises.map((e) => {
       const ok = e.reps.every((r) => r >= 5);
       return `<div class="row"><span>${e.label} — ${e.weight} lb</span>

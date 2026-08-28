@@ -19,6 +19,10 @@ desktops, and installs to an Android home screen as a PWA.
 - Miss reps → repeat the same weight next time.
 - Miss **3 sessions in a row** at a weight → automatic **10% deload** (rounded to 5 lb).
 
+The History tab shows your current weights, a monthly calendar of completed
+workouts, a strength-over-time chart for all five lifts, and your recent
+sessions.
+
 ## Run locally
 
 ```bash
@@ -48,9 +52,28 @@ The script:
 4. Prints the URL when done.
 
 The SQLite database lives at `/var/lib/strength-trainer/strength.db` inside the
-container and survives app updates. **To update the app later**, push to GitHub
-and run the same one-liner again — if the container already exists it only
-re-downloads the code and restarts the service.
+container and survives app updates.
+
+## Updates are automatic
+
+The installer sets up a systemd timer inside the container
+(`strength-trainer-update.timer`) that checks this GitHub repo every 30
+minutes. When you push a new version, the container downloads it, swaps it into
+place, and restarts the service on its own — your workout database is never
+touched. Just `git push` and wait up to half an hour.
+
+Useful commands (run on the Proxmox host, replace `<ctid>`):
+
+```bash
+pct exec <ctid> -- /usr/local/bin/strength-trainer-update   # update right now
+```
+
+```bash
+pct exec <ctid> -- journalctl -u strength-trainer-update -n 20   # updater log
+```
+
+Re-running the install one-liner also works — it finds the existing container
+by hostname, refreshes the service configuration, and deploys the latest code.
 
 Defaults can be overridden with environment variables:
 
