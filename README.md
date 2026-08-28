@@ -38,7 +38,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/awarwick-mscst/strength-trai
 The script:
 
 1. Downloads the Debian 12 LXC template (if needed) and creates an unprivileged
-   container (default CTID **200**, DHCP on `vmbr0`, 512 MB RAM, 4 GB disk).
+   container (next free CTID, DHCP on `vmbr0`, 512 MB RAM, 4 GB disk). On later
+   runs it finds the existing container by its hostname (`strength-trainer`)
+   and refuses to touch any unrelated container.
 2. Installs Node.js 22 inside it.
 3. The container downloads the latest app code from this GitHub repo into
    `/opt/strength-trainer`, and a hardened systemd service runs it as a

@@ -6,11 +6,12 @@
 #
 #   bash <(curl -fsSL https://raw.githubusercontent.com/awarwick-mscst/strength-trainer/main/deploy/deploy.sh)
 #
-# First run: creates a Debian 12 LXC, installs Node.js 22, then the container
-# downloads the app from GitHub and a systemd service starts it on port 80.
-# Later runs with the same CTID: the container re-downloads the latest code
-# from GitHub and restarts (the SQLite database in /var/lib/strength-trainer
-# is untouched).
+# First run: creates a Debian 12 LXC (next free CTID unless CTID= is given),
+# installs Node.js 22, then the container downloads the app from GitHub and a
+# systemd service starts it on port 80.
+# Later runs: finds the existing container by its hostname (strength-trainer),
+# re-downloads the latest code from GitHub, and restarts (the SQLite database
+# in /var/lib/strength-trainer is untouched).
 #
 # Override any of these via environment variables, e.g.:
 #   CTID=210 STORAGE=local-zfs ./deploy.sh
@@ -19,7 +20,7 @@ set -euo pipefail
 REPO="${REPO:-awarwick-mscst/strength-trainer}"
 BRANCH="${BRANCH:-main}"
 
-CTID="${CTID:-200}"
+CTID="${CTID:-}"                         # empty = find by hostname / next free id
 HOSTNAME="${HOSTNAME_CT:-strength-trainer}"
 STORAGE="${STORAGE:-local-lvm}"          # rootfs storage
 TEMPLATE_STORAGE="${TEMPLATE_STORAGE:-local}"
@@ -40,9 +41,46 @@ if ! command -v pct >/dev/null; then
   exit 1
 fi
 
+# ------------------------------------------------------- find or pick CTID
+ct_hostname() { pct config "$1" 2>/dev/null | awk '/^hostname:/{print $2}'; }
+
+find_ct_by_hostname() {
+  local id
+  for id in $(pct list | awk 'NR>1{print $1}'); do
+    if [ "$(ct_hostname "$id")" = "$HOSTNAME" ]; then
+      echo "$id"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if [ -z "$CTID" ]; then
+  if CTID="$(find_ct_by_hostname)"; then
+    say "Found existing '$HOSTNAME' container: CTID $CTID."
+  else
+    CTID="$(pvesh get /cluster/nextid)"
+    say "No existing '$HOSTNAME' container — will create CTID $CTID."
+  fi
+elif pct status "$CTID" >/dev/null 2>&1 && [ "$(ct_hostname "$CTID")" != "$HOSTNAME" ]; then
+  echo "ERROR: container $CTID exists but its hostname is '$(ct_hostname "$CTID")'," >&2
+  echo "       not '$HOSTNAME' — refusing to touch it. Re-run without CTID= to" >&2
+  echo "       auto-pick a free id, or pass a different CTID." >&2
+  exit 1
+fi
+
 # ---------------------------------------------------------------- create CT
 if pct status "$CTID" >/dev/null 2>&1; then
   say "Container $CTID already exists — updating app only."
+  if ! pct status "$CTID" | grep -q running; then
+    say "Container is stopped — starting it..."
+    pct start "$CTID"
+    for i in $(seq 1 30); do
+      if pct exec "$CTID" -- ping -c1 -W2 github.com >/dev/null 2>&1; then break; fi
+      sleep 2
+      [ "$i" = 30 ] && { echo "ERROR: container has no network." >&2; exit 1; }
+    done
+  fi
 else
   say "Finding Debian 12 template..."
   pveam update >/dev/null
