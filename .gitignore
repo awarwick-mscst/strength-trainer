@@ -4,3 +4,5 @@ android/.gradle/
 android/**/build/
 android/local.properties
 *.apk
+desktop/dist/
+*.exe

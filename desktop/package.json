@@ -1,0 +1,35 @@
+{
+  "name": "strength-trainer-desktop",
+  "version": "1.2.0",
+  "description": "Offline strength training tracker for Windows",
+  "author": "Aaron",
+  "license": "MIT",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "build:windows": "electron-builder --win nsis --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.strengthtrainer.desktop",
+    "productName": "Strength Trainer",
+    "directories": { "output": "dist", "buildResources": "resources" },
+    "files": ["main.cjs", "preload.cjs", "store.cjs", "package.json", "resources/icon.ico"],
+    "extraResources": [{ "from": "../public", "to": "ui", "filter": ["**/*"] }],
+    "win": { "target": "nsis", "icon": "resources/icon.ico", "artifactName": "Strength-Trainer-Setup-${version}-${arch}.${ext}" },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    }
+  }
+}

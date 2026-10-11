@@ -10,13 +10,14 @@ let finishing = false;
 
 const SESSION_KEY = 'st-session';
 const isAndroid = typeof AndroidStorage !== 'undefined';
-const isLocal = isAndroid || new URLSearchParams(location.search).get('offline') === '1';
+const isDesktop = typeof StrengthDesktop !== 'undefined';
+const isLocal = isAndroid || isDesktop || new URLSearchParams(location.search).get('offline') === '1';
 const storage = isAndroid ? {
   getItem: key => AndroidStorage.getItem(key),
   setItem: (key, value) => { if (!AndroidStorage.setItem(key, value)) throw new Error('Could not save on this device. Free some storage and try again.'); },
   removeItem: key => { if (!AndroidStorage.removeItem(key)) throw new Error('Could not clear the saved session.'); },
   commitWorkout: (key, value) => { if (!AndroidStorage.commitWorkout(key, value)) throw new Error('Could not save the workout. Free some storage and try again.'); },
-} : localStorage;
+} : isDesktop ? StrengthDesktop : localStorage;
 const localApi = isLocal ? StrengthLocal.createStore(storage).api : null;
 
 // ---------- api ----------
@@ -451,7 +452,7 @@ async function renderHistory() {
 function renderSettings() {
   view.innerHTML = '';
   if (isAndroid) view.appendChild(renderHeartRateCard(true));
-  const exportCard = el(`<div class="card"><h2>${isLocal ? 'Saved on this device' : 'Export your data'}</h2><p class="sub" style="margin-top:6px">${isLocal ? 'Workouts and settings stay on this device. Export regularly: uninstalling the app or clearing its data removes your history.' : 'Download your complete workout history, current weights, and settings.'}</p><button class="primary-btn" style="margin-top:14px">Export Excel (.xlsx)</button><p class="sub" style="margin-top:8px">Includes all completed workouts. The workout currently in progress is not included.</p></div>`);
+  const exportCard = el(`<div class="card"><h2>${isLocal ? 'Saved on this device' : 'Export your data'}</h2><p class="sub" style="margin-top:6px">${isDesktop ? 'Workouts and settings stay on this PC. Export regularly to keep a copy. Updates and uninstalling keep your local workout file.' : isLocal ? 'Workouts and settings stay on this device. Export regularly: uninstalling the app or clearing its data removes your history.' : 'Download your complete workout history, current weights, and settings.'}</p><button class="primary-btn" style="margin-top:14px">Export Excel (.xlsx)</button><p class="sub" style="margin-top:8px">Includes all completed workouts. The workout currently in progress is not included.</p></div>`);
   const exportButton = exportCard.querySelector('button');
   exportButton.onclick = async () => {
     exportButton.disabled = true;
@@ -459,7 +460,10 @@ function renderSettings() {
       const history = await api('/api/workouts');
       const bytes = StrengthExcel.createWorkbook(state, history);
       const filename = `strength-trainer-${new Date().toISOString().slice(0, 10)}.xlsx`;
-      if (isAndroid) {
+      if (isDesktop) {
+        const result = await StrengthDesktop.exportExcel(filename, bytes);
+        toast(result.canceled ? 'Export canceled.' : 'Excel file saved.');
+      } else if (isAndroid) {
         let binary = '';
         for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
         AndroidStorage.exportExcel(filename, btoa(binary));
@@ -569,5 +573,5 @@ document.querySelectorAll('nav button').forEach((b) => {
     message.textContent = isLocal ? `Could not load local data: ${err.message}` : 'Cannot reach the server. Is it running?';
     view.appendChild(message);
   }
-  if (!isAndroid && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (!isAndroid && !isDesktop && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();

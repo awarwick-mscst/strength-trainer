@@ -1,5 +1,5 @@
 'use strict';
-// Shared by the bundled Android app and the browser's ?offline=1 preview.
+// Shared by the bundled Android/Windows apps and the browser's ?offline=1 preview.
 (function (root) {
   const labels = { squat: 'Squat', bench: 'Bench Press', row: 'Bent-Over Barbell Row', ohp: 'Overhead Barbell Press', deadlift: 'Deadlift' };
   const plans = { A: ['squat', 'bench', 'row'], B: ['squat', 'ohp', 'deadlift'] };

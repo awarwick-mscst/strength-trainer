@@ -1,8 +1,9 @@
 # Strength Trainer
 
-A self-hosted A/B 5×5 linear-progression strength tracker. Single user, zero npm
-dependencies (Node.js 22+ with built-in SQLite), works on phones, tablets, and
-desktops, and installs to an Android home screen as a PWA.
+A single-user A/B 5×5 linear-progression strength tracker. Choose the
+**standalone Windows installer**, the **standalone Android app**, or the
+optional self-hosted web version. The Windows and Android apps store workouts
+locally and need no account, cloud service, or running server.
 
 ## The program
 
@@ -22,6 +23,71 @@ desktops, and installs to an Android home screen as a PWA.
 The History tab shows your current weights, a monthly calendar of completed
 workouts, a strength-over-time chart for all five lifts, and your recent
 sessions.
+
+## Windows installer
+
+The Windows desktop app runs on **Windows 10 or 11 (64-bit Intel/AMD)**.
+It includes everything needed to run: users do not need to install Node.js,
+start a server, or use a browser.
+
+1. Download **Strength-Trainer-Setup-1.2.0-x64.exe** from
+   [GitHub Releases](https://github.com/awarwick-mscst/strength-trainer/releases/latest).
+2. Open the installer and follow the setup wizard. Installation is for your
+   Windows user and does not require administrator access.
+3. Open **Strength Trainer** from the Start menu or desktop shortcut.
+4. Log workouts normally. The stopwatch, pause/resume, progression, history,
+   charts, and settings all work offline.
+5. Choose **Settings → Export Excel (.xlsx)** or **File → Export Excel** and
+   select where to save the workbook.
+
+The installer is currently **unsigned**; Windows may display an unknown
+publisher or SmartScreen prompt. Download it only from this project's release.
+
+### Windows data and updates
+
+Workouts, settings, and unfinished sessions are saved in
+`%APPDATA%\StrengthTrainer\workouts.json`. The app does not connect to the
+internet. Install a newer installer to update it; updates are manual and keep
+your data. Uninstalling also keeps this data file. To reset everything, close
+the app and remove that file yourself.
+
+Export regularly for an Excel archive. The workbook includes completed
+workouts, sets, workout durations, current weights, miss counts, and settings.
+Excel import is not supported. For a restorable backup, close the app and copy
+`workouts.json`; restore it to the same location while the app is closed.
+
+Windows, Android, and the web server each have separate histories; there is
+no automatic syncing or import between them. The optional Fitbit / Health
+Connect connector is available only in the Android app.
+
+### Build the Windows installer from source
+
+Developers need Node.js 22+ and npm on Windows:
+
+```powershell
+npm ci --prefix desktop
+npm run build:windows --prefix desktop
+```
+
+The installer is written to
+`desktop/dist/Strength-Trainer-Setup-1.2.0-x64.exe`. Build dependencies may
+require downloads; the installed app runs entirely offline. For development,
+use `npm start --prefix desktop`. Run `npm test` from the repository root for
+storage, progression, timer, export, and server migration checks.
+
+The packaged app also has a hidden smoke test that uses a separate temporary
+data folder and checks session recovery, pause/resume, workout completion,
+progression, and Excel export:
+
+```powershell
+$testDir = Join-Path $env:TEMP ("strength-test-" + [guid]::NewGuid())
+Start-Process -FilePath '.\desktop\dist\win-unpacked\Strength Trainer.exe' `
+  -ArgumentList "--self-test --self-test-dir=$testDir" -WindowStyle Hidden -Wait
+Get-Content (Join-Path $testDir 'self-test-result.json')
+```
+
+The test saves its workbook and screenshot in that temporary folder. It never
+uses your normal workout file.
 
 ## Standalone Android app
 
@@ -100,7 +166,12 @@ With a disposable Android emulator running, use
 native storage/restart/export checks. The instrumentation test resets this
 app's data on the test device; do not run it against your personal workout phone.
 
-## Run the server-backed web version
+## Optional: run the server-backed web version
+
+This is a manual Node.js server setup, separate from the Windows installer.
+It can run on Windows, macOS, or Linux with Node.js 22+ (built-in SQLite).
+Use this version if you want to access one server's history from a browser
+on multiple devices. It has no npm dependencies.
 
 ```bash
 node server.js
@@ -108,7 +179,7 @@ node server.js
 
 Then open http://localhost:3000. The database is created at `data/strength.db`.
 
-## Deploy to Proxmox
+## Optional: deploy the web server to Proxmox
 
 Run this one-liner on the Proxmox host as root — no checkout needed:
 
@@ -131,7 +202,7 @@ The script:
 The SQLite database lives at `/var/lib/strength-trainer/strength.db` inside the
 container and survives app updates.
 
-## Updates are automatic
+### Proxmox updates are automatic
 
 The installer sets up a systemd timer inside the container
 (`strength-trainer-update.timer`) that checks this GitHub repo every 30
@@ -161,13 +232,13 @@ CTID=210 STORAGE=local-zfs BRIDGE=vmbr1 NET_IP=192.168.1.50/24,gw=192.168.1.1 ./
 (`CTID`, `HOSTNAME_CT`, `STORAGE`, `TEMPLATE_STORAGE`, `DISK_GB`, `MEMORY_MB`,
 `CORES`, `BRIDGE`, `NET_IP`)
 
-## Use it on your phone
+### Use the Proxmox web app on your phone
 
 Open `http://<container-ip>/` in Chrome on Android and choose
 **Add to Home screen** (or the "Install app" prompt). It opens full-screen like
 a native app.
 
-## Backup
+### Back up the Proxmox web server
 
 Everything is one file. From the Proxmox host:
 
