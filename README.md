@@ -82,7 +82,7 @@ progression, and Excel export:
 ```powershell
 $testDir = Join-Path $env:TEMP ("strength-test-" + [guid]::NewGuid())
 Start-Process -FilePath '.\desktop\dist\win-unpacked\Strength Trainer.exe' `
-  -ArgumentList "--self-test --self-test-dir=$testDir" -WindowStyle Hidden -Wait
+  -ArgumentList "--self-test --self-test-dir=`"$testDir`"" -WindowStyle Hidden -Wait
 Get-Content (Join-Path $testDir 'self-test-result.json')
 ```
 
