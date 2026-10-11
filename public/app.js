@@ -2,15 +2,26 @@
 
 const view = document.getElementById('view');
 const badge = document.getElementById('next-type-badge');
-let state = null; // server state
+let state = null;
 let session = null; // in-progress workout { type, exercises: [{lift,label,weight,reps:[null|0-5,...]}] }
 let tab = 'today';
 let todayType = null; // A/B override chosen on the Today screen (null = follow rotation)
+let finishing = false;
 
 const SESSION_KEY = 'st-session';
+const isAndroid = typeof AndroidStorage !== 'undefined';
+const isLocal = isAndroid || new URLSearchParams(location.search).get('offline') === '1';
+const storage = isAndroid ? {
+  getItem: key => AndroidStorage.getItem(key),
+  setItem: (key, value) => { if (!AndroidStorage.setItem(key, value)) throw new Error('Could not save on this device. Free some storage and try again.'); },
+  removeItem: key => { if (!AndroidStorage.removeItem(key)) throw new Error('Could not clear the saved session.'); },
+  commitWorkout: (key, value) => { if (!AndroidStorage.commitWorkout(key, value)) throw new Error('Could not save the workout. Free some storage and try again.'); },
+} : localStorage;
+const localApi = isLocal ? StrengthLocal.createStore(storage).api : null;
 
 // ---------- api ----------
 async function api(path, opts) {
+  if (localApi) return localApi(path, opts);
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -18,15 +29,73 @@ async function api(path, opts) {
 }
 const loadState = async () => { state = await api('/api/state'); };
 
+// ---------- optional device-local Fitbit / Health Connect reader ----------
+const heartRequests = new Map();
+let latestHeartRate = null;
+let heartRequestId = 0;
+window.onHeartRateResult = (id, result) => {
+  const pending = heartRequests.get(id);
+  if (!pending) return;
+  clearTimeout(pending.timeout);
+  heartRequests.delete(id);
+  if (result.error) pending.reject(new Error(result.error));
+  else pending.resolve(result);
+};
+window.onHeartRatePermissionChanged = () => { if (state) render(); };
+function readHeartRate(start, end) {
+  return new Promise((resolve, reject) => {
+    const id = String(++heartRequestId);
+    const timeout = setTimeout(() => { heartRequests.delete(id); reject(new Error('Heart-rate read timed out. Try again.')); }, 20000);
+    heartRequests.set(id, { resolve, reject, timeout });
+    try { AndroidStorage.readHeartRate(id, start, end); }
+    catch (err) { clearTimeout(timeout); heartRequests.delete(id); reject(err); }
+  });
+}
+function renderHeartRateCard(settings = false) {
+  const status = JSON.parse(AndroidStorage.heartRateStatus());
+  const card = el(`<div class="card"><h2>Fitbit · synced heart rate</h2><p class="sub heart-status" style="margin-top:6px"></p><p class="sub" style="margin-top:8px">Versa 4 readings arrive after syncing. This is not a live heart-rate monitor.</p></div>`);
+  const text = card.querySelector('.heart-status');
+  text.textContent = !status.supported ? 'The optional heart-rate connector requires Android 14 or newer. Workout tracking and the timer work without it.' : !status.granted ? 'Connect Health Connect to read Fitbit heart rate stored on this phone.' : latestHeartRate ? `${latestHeartRate.bpm} bpm · recorded ${new Date(latestHeartRate.time).toLocaleString()} · Fitbit / Google Health` : 'Connected. Refresh to read the latest Fitbit reading stored on this phone.';
+  if (status.supported) {
+    const button = el(`<button class="ghost-btn">${status.granted ? 'Refresh synced heart rate' : 'Connect Health Connect'}</button>`);
+    button.onclick = async () => {
+      if (!status.granted) { AndroidStorage.connectHeartRate(); return; }
+      button.disabled = true;
+      try {
+        const end = new Date();
+        const result = await readHeartRate(new Date(end.getTime() - 86400000).toISOString(), end.toISOString());
+        latestHeartRate = result.latest || null;
+        text.textContent = latestHeartRate ? `${latestHeartRate.bpm} bpm · recorded ${new Date(latestHeartRate.time).toLocaleString()} · Fitbit / Google Health` : 'No Fitbit heart-rate readings in the last 24 hours. Sync your watch and enable heart-rate sharing to Health Connect.';
+      } catch (err) { latestHeartRate = null; text.textContent = err.message; }
+      finally { button.disabled = false; }
+    };
+    card.appendChild(button);
+    if (settings) {
+      const manage = el('<button class="ghost-btn">Manage Health Connect access</button>');
+      manage.onclick = () => AndroidStorage.manageHeartRateAccess();
+      card.appendChild(manage);
+    }
+  }
+  if (settings) card.appendChild(el('<p class="sub">In Fitbit / Google Health, enable writing heart rate to Health Connect. Allow Strength Trainer to read heart rate. Reads stay local; Fitbit’s own syncing may need internet. After syncing, use History to attach readings to a finished workout and include them in Excel export.</p>'));
+  return card;
+}
+
 // ---------- session persistence ----------
 function saveSession() {
-  if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  else localStorage.removeItem(SESSION_KEY);
+  if (session) storage.setItem(SESSION_KEY, JSON.stringify(session));
+  else storage.removeItem(SESSION_KEY);
 }
 function restoreSession() {
   try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (raw) session = JSON.parse(raw);
+    const raw = storage.getItem(SESSION_KEY);
+    if (raw) {
+      session = JSON.parse(raw);
+      if (!session.timer) {
+        session.startedAt = new Date().toISOString();
+        session.timer = StrengthTimer.create();
+        saveSession();
+      }
+    }
   } catch { session = null; }
 }
 
@@ -53,13 +122,15 @@ function startSession() {
   const type = todayType || state.nextWorkout.type;
   session = {
     type,
+    startedAt: new Date().toISOString(),
+    timer: StrengthTimer.create(),
     exercises: state.nextWorkout.plans[type].map((e) => ({
       ...e,
       reps: Array(state.nextWorkout.sets).fill(null),
     })),
   };
-  saveSession();
-  render();
+  try { saveSession(); render(); }
+  catch (err) { session = null; toast(err.message, true); }
 }
 
 function cycleSet(exIdx, setIdx) {
@@ -69,14 +140,19 @@ function cycleSet(exIdx, setIdx) {
   if (cur === null) reps[setIdx] = 5;
   else if (cur === 0) reps[setIdx] = null;
   else reps[setIdx] = cur - 1;
-  saveSession();
-  render();
+  try { saveSession(); render(); }
+  catch (err) { reps[setIdx] = cur; toast(err.message, true); }
 }
 
 async function finishWorkout() {
+  if (finishing) return;
+  finishing = true;
   const now = new Date();
   const payload = {
     type: session.type,
+    startedAt: session.startedAt,
+    finishedAt: now.toISOString(),
+    durationSeconds: Math.floor(StrengthTimer.elapsed(session.timer, now.getTime()) / 1000),
     date: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
     exercises: session.exercises.map((e) => ({
       lift: e.lift,
@@ -99,7 +175,7 @@ async function finishWorkout() {
     toast(allDone ? 'Workout complete — weights go up!' : 'Logged. Missed lifts repeat next time.', !allDone);
   } catch (err) {
     toast(err.message, true);
-  }
+  } finally { finishing = false; }
 }
 
 function renderToday() {
@@ -147,6 +223,16 @@ function renderToday() {
       <h2>Workout ${session.type} — in progress</h2>
       <p class="sub">Tap a circle after each set: first tap = 5 reps, tap again to lower.</p>
     </div>`));
+  const timerCard = el(`<div class="card timer-card"><div><p class="sub">Workout time${session.timer.runningSince === null ? ' · paused' : ''}</p><div id="workout-time" class="timer-value"></div></div><button class="timer-button">${session.timer.runningSince === null ? 'Resume' : 'Pause'}</button></div>`);
+  timerCard.querySelector('button').onclick = () => {
+    const previous = session.timer;
+    session.timer = StrengthTimer.toggle(previous);
+    try { saveSession(); render(); }
+    catch (err) { session.timer = previous; toast(err.message, true); }
+  };
+  view.appendChild(timerCard);
+  updateTimer();
+  if (isAndroid) view.appendChild(renderHeartRateCard());
   session.exercises.forEach((e, exIdx) => {
     const card = el(`
       <div class="card">
@@ -179,9 +265,10 @@ function renderToday() {
   const cancel = el('<button class="ghost-btn">Discard workout</button>');
   cancel.onclick = () => {
     if (confirm('Discard this workout? Nothing will be saved.')) {
+      const previous = session;
       session = null;
-      saveSession();
-      render();
+      try { saveSession(); render(); }
+      catch (err) { session = previous; toast(err.message, true); }
     }
   };
   view.appendChild(cancel);
@@ -331,16 +418,62 @@ async function renderHistory() {
       return `<div class="row"><span>${e.label} — ${e.weight} lb</span>
         <span class="reps${ok ? ' ok' : ''}">${e.reps.join('/')}</span></div>`;
     }).join('');
-    view.appendChild(el(`
+    const workoutCard = el(`
       <div class="card history-item">
-        <h2>Workout ${w.type} <span class="sub">${w.date}</span></h2>${rows}
-      </div>`));
+        <h2>Workout ${w.type} <span class="sub">${w.date}</span></h2>
+        ${w.durationSeconds != null ? `<p class="sub">Workout time: ${StrengthTimer.format(w.durationSeconds)}</p>` : ''}${rows}
+      </div>`);
+    if (w.heartRate) {
+      const summary = el('<p class="sub heart-summary"></p>');
+      summary.textContent = `Synced Fitbit heart rate: ${w.heartRate.averageBpm} bpm average · ${w.heartRate.minBpm}–${w.heartRate.maxBpm} bpm · ${w.heartRate.sampleCount} readings`;
+      workoutCard.appendChild(summary);
+    }
+    if (isAndroid && w.startedAt && w.finishedAt) {
+      const button = el('<button class="ghost-btn">Read synced Fitbit heart rate</button>');
+      button.onclick = async () => {
+        button.disabled = true;
+        try {
+          const result = await readHeartRate(w.startedAt, w.finishedAt);
+          if (!result.summary) throw new Error('No Fitbit readings synced for this workout yet. Sync your watch, then try again.');
+          await api(`/api/workouts/${w.id}/heart-rate`, { method: 'PUT', body: JSON.stringify(result.summary) });
+          if (tab === 'history') render();
+          toast('Workout heart rate saved on this device.');
+        } catch (err) { toast(err.message, true); }
+        finally { button.disabled = false; }
+      };
+      workoutCard.appendChild(button);
+    }
+    view.appendChild(workoutCard);
   }
 }
 
 // ---------- settings ----------
 function renderSettings() {
   view.innerHTML = '';
+  if (isAndroid) view.appendChild(renderHeartRateCard(true));
+  const exportCard = el(`<div class="card"><h2>${isLocal ? 'Saved on this device' : 'Export your data'}</h2><p class="sub" style="margin-top:6px">${isLocal ? 'Workouts and settings stay on this device. Export regularly: uninstalling the app or clearing its data removes your history.' : 'Download your complete workout history, current weights, and settings.'}</p><button class="primary-btn" style="margin-top:14px">Export Excel (.xlsx)</button><p class="sub" style="margin-top:8px">Includes all completed workouts. The workout currently in progress is not included.</p></div>`);
+  const exportButton = exportCard.querySelector('button');
+  exportButton.onclick = async () => {
+    exportButton.disabled = true;
+    try {
+      const history = await api('/api/workouts');
+      const bytes = StrengthExcel.createWorkbook(state, history);
+      const filename = `strength-trainer-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      if (isAndroid) {
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+        AndroidStorage.exportExcel(filename, btoa(binary));
+      } else {
+        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        const link = document.createElement('a');
+        link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        toast('Excel export downloaded.');
+      }
+    } catch (err) { toast(err.message, true); }
+    finally { exportButton.disabled = false; }
+  };
+  view.appendChild(exportCard);
   const card = el(`
     <div class="card">
       <div class="settings-row">
@@ -354,12 +487,14 @@ function renderSettings() {
   card.querySelectorAll('.seg button').forEach((b) => {
     if (Number(b.dataset.d) === state.daysPerWeek) b.classList.add('active');
     b.onclick = async () => {
-      state = await api('/api/settings', {
+      try {
+        state = await api('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ daysPerWeek: Number(b.dataset.d) }),
-      });
-      render();
+        });
+        render();
+      } catch (err) { toast(err.message, true); }
     };
   });
   view.appendChild(card);
@@ -402,6 +537,13 @@ function renderSettings() {
 }
 
 // ---------- shell ----------
+function updateTimer() {
+  const value = document.getElementById('workout-time');
+  if (value && session?.timer) value.textContent = StrengthTimer.format(StrengthTimer.elapsed(session.timer) / 1000);
+}
+setInterval(updateTimer, 1000);
+document.addEventListener('visibilitychange', updateTimer);
+
 function render() {
   badge.textContent = session ? `Workout ${session.type}` : `Next: ${state.nextWorkout.type}`;
   document.querySelectorAll('nav button').forEach((b) => {
@@ -422,7 +564,10 @@ document.querySelectorAll('nav button').forEach((b) => {
     await loadState();
     render();
   } catch (err) {
-    view.innerHTML = '<p class="hint">Cannot reach the server. Is it running?</p>';
+    view.innerHTML = '';
+    const message = el('<p class="hint"></p>');
+    message.textContent = isLocal ? `Could not load local data: ${err.message}` : 'Cannot reach the server. Is it running?';
+    view.appendChild(message);
   }
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (!isAndroid && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();

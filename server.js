@@ -55,6 +55,11 @@ db.exec(`
     reps       INTEGER NOT NULL
   );
 `);
+// Additive migration: old workouts keep unknown (NULL) durations.
+const workoutColumns = new Set(db.prepare('PRAGMA table_info(workouts)').all().map(c => c.name));
+for (const [name, type] of [['started_at', 'TEXT'], ['finished_at', 'TEXT'], ['duration_seconds', 'INTEGER']]) {
+  if (!workoutColumns.has(name)) db.exec(`ALTER TABLE workouts ADD COLUMN ${name} ${type}`);
+}
 const seedLift = db.prepare('INSERT OR IGNORE INTO lifts (name, weight) VALUES (?, ?)');
 for (const name of Object.keys(LIFTS)) seedLift.run(name, START_WEIGHT);
 db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)').run('daysPerWeek', '3');
@@ -115,7 +120,11 @@ function recordWorkout(body) {
   const now = new Date();
   const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const workoutDate = date || localToday;
-  const insertWorkout = db.prepare('INSERT INTO workouts (date, type) VALUES (?, ?)');
+  if (body.durationSeconds != null && (!Number.isSafeInteger(body.durationSeconds) || body.durationSeconds < 0)) throw httpError(400, 'invalid workout duration');
+  if (body.startedAt != null || body.finishedAt != null) {
+    if (!Number.isFinite(Date.parse(body.startedAt)) || !Number.isFinite(Date.parse(body.finishedAt)) || Date.parse(body.finishedAt) < Date.parse(body.startedAt)) throw httpError(400, 'invalid workout times');
+  }
+  const insertWorkout = db.prepare('INSERT INTO workouts (date, type, started_at, finished_at, duration_seconds) VALUES (?, ?, ?, ?, ?)');
   const insertSet = db.prepare(
     'INSERT INTO workout_sets (workout_id, lift, weight, set_number, reps) VALUES (?, ?, ?, ?, ?)'
   );
@@ -124,7 +133,7 @@ function recordWorkout(body) {
 
   db.exec('BEGIN');
   try {
-    const workoutId = insertWorkout.run(workoutDate, type).lastInsertRowid;
+    const workoutId = insertWorkout.run(workoutDate, type, body.startedAt ?? null, body.finishedAt ?? null, body.durationSeconds ?? null).lastInsertRowid;
     for (const ex of exercises) {
       ex.reps.forEach((r, i) => insertSet.run(workoutId, ex.lift, ex.weight, i + 1, r));
       // progression: all sets at target reps -> +5 lb; otherwise a fail.
@@ -150,7 +159,7 @@ function recordWorkout(body) {
 }
 
 function getHistory() {
-  const workouts = db.prepare('SELECT id, date, type FROM workouts ORDER BY id DESC').all();
+  const workouts = db.prepare('SELECT id, date, type, started_at, finished_at, duration_seconds FROM workouts ORDER BY id DESC').all();
   const setsFor = db.prepare(
     'SELECT lift, weight, set_number, reps FROM workout_sets WHERE workout_id = ? ORDER BY id'
   );
@@ -160,7 +169,7 @@ function getHistory() {
       if (!byLift[s.lift]) byLift[s.lift] = { lift: s.lift, label: LIFTS[s.lift], weight: s.weight, reps: [] };
       byLift[s.lift].reps.push(s.reps);
     }
-    return { id: w.id, date: w.date, type: w.type, exercises: Object.values(byLift) };
+    return { id: w.id, date: w.date, type: w.type, startedAt: w.started_at, finishedAt: w.finished_at, durationSeconds: w.duration_seconds, exercises: Object.values(byLift) };
   });
 }
 

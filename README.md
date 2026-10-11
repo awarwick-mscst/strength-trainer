@@ -23,7 +23,84 @@ The History tab shows your current weights, a monthly calendar of completed
 workouts, a strength-over-time chart for all five lifts, and your recent
 sessions.
 
-## Run locally
+## Standalone Android app
+
+The `android/` project builds an installable app for Android 6.0 and newer.
+The interface is bundled inside the APK; workouts, settings, and unfinished
+sessions are stored privately on the device. It requires no Node server,
+account, cloud service, or internet connection. The app has no internet
+permission, and automatic Android cloud backup is disabled.
+
+In **Settings → Export Excel (.xlsx)**, choose a location such as **Downloads**
+in Android's file picker. The workbook contains all completed workouts (one row
+per exercise, including all five sets), current weights and miss counts, and
+settings. Export works offline and requires no broad storage permission.
+An unfinished workout is saved in the app but excluded from the workbook.
+
+Uninstalling the app or clearing app data deletes the local history. Export
+regularly. Excel export is for viewing/archiving; importing it back into the
+app is not currently supported. Installing an update with the same application
+ID and signing key preserves the data. The Android app starts with its own
+history; it does not automatically import the existing server database.
+
+To build with JDK 17+ and Android SDK 34 (Android Studio can install them):
+
+```powershell
+cd android
+# Set ANDROID_HOME to your SDK, or create local.properties with sdk.dir=...
+.\gradlew.bat assembleDebug
+```
+
+Install `android/app/build/outputs/apk/debug/app-debug.apk` on your phone.
+The debug APK is suitable for personal testing. Keep the same signing key for
+future updates; use a private release key for long-term distribution. Building
+may download Gradle/Android build dependencies; running the app needs none.
+
+For a browser preview of device-local behavior, run the web server and open
+`http://localhost:3000/?offline=1`. This preview uses browser storage, separate
+from both the server database and the Android app. The existing server-backed
+web version also includes Excel export.
+
+Run the local-storage and workbook tests with `npm test`.
+The workout stopwatch starts automatically and continues while the app is
+closed. Pause/resume is saved on the device. Finished workout durations appear
+in History and in Excel exports; older workouts have no recorded duration.
+
+### Fitbit Versa 4 / synced heart rate
+
+The optional connector uses the phone's **Health Connect** store on **Android
+14 or newer**. Strength Trainer reads locally and still has no internet
+permission. On older Android versions the timer, workouts, and Excel export
+work, but this connector is unavailable.
+
+Versa 4 is not listed among Google's supported live Bluetooth heart-rate
+broadcasting models. This connector reads **synced readings, not a live feed**.
+Fitbit / Google Health's own syncing may require internet, and readings may be
+delayed or absent. This is optional; workout tracking remains entirely offline.
+
+1. Enable writing **heart rate** to Health Connect in Fitbit / Google Health.
+2. In Strength Trainer Settings, tap **Connect Health Connect** and allow
+   heart-rate read access. No write or background health permissions are requested.
+3. Use **Refresh synced heart rate** to see the latest reading and its timestamp.
+4. After syncing the watch, go to History and tap **Read synced Fitbit heart rate**
+   on a completed workout. This saves an average, minimum, maximum, and sample
+   count for its start/end interval. The interval includes any paused time.
+   These summaries are included in Excel export. Missing readings stay blank.
+
+Only Fitbit / Google Health records (`com.fitbit.FitbitMobile`) are imported.
+Other Health Connect sources are excluded. Reading is foreground-only and
+subject to Health Connect's permission/history limits. Revoking access prevents
+new reads but does not delete summaries already saved or exported.
+
+Reference: [Google's heart-rate broadcasting models](https://support.google.com/googlehealth/answer/14236705)
+and [Health Connect sharing](https://support.google.com/googlehealth/answer/14506680).
+
+With a disposable Android emulator running, use
+`cd android` then `.\gradlew.bat connectedDebugAndroidTest lintDebug` for the
+native storage/restart/export checks. The instrumentation test resets this
+app's data on the test device; do not run it against your personal workout phone.
+
+## Run the server-backed web version
 
 ```bash
 node server.js

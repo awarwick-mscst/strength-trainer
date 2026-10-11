@@ -1,7 +1,7 @@
 'use strict';
 // Cache static assets only; API calls always go to the network.
-const CACHE = 'strength-v1';
-const ASSETS = ['/', '/style.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
+const CACHE = 'strength-v3';
+const ASSETS = ['/', '/style.css', '/app.js', '/local-store.js', '/excel-export.js', '/workout-timer.js', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));

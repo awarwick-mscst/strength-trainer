@@ -1,2 +1,6 @@
 data/
 node_modules/
+android/.gradle/
+android/**/build/
+android/local.properties
+*.apk
